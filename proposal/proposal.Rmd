@@ -1,0 +1,168 @@
+---
+title: "Project proposal"
+author: "Team 12 - Alon Bar, Amir Belinsky, Tal Ber and Nitzan Graf"
+output: pdf_document
+---
+
+```{r load-packages, message = FALSE, include = FALSE}
+# libraries
+library(knitr)
+library(tidyverse)
+library(broom)
+library(htmltools)
+```
+
+```{r setup, include = FALSE}
+opts_chunk$set(echo=FALSE) # hide source code in the document
+```
+
+## Section 1 - Introduction
+
+LLMs are now commonplace and are widely used by individuals and companies, while model prices range from a few cents to hundreds of dollars per million tokens. We were curious if we are actually getting good value for our money. Existing platforms usually  compare models using overall price versus performance scores, but they treat intelligence as one combined capability.
+
+Our research asks a more specific question:  does $1 buy you more coding skill, scientific reasoning, or general knowledge in today's LLM market? In other words, is the market pricing LLMs as one big "intelligence" bundle, or are some skills cheaper to buy than others? 
+
+To answer this, we compare model cost efficiency across several benchmark categories, including coding , advanced reasoning , science , and general knowledge. Rather than looking only at raw benchmark scores, we analyze price per performance point in each domain.
+
+This question matters because different applications require different skills. A company building a coding assistant may care more about coding performance than general reasoning. If some capabilities are consistently cheaper for example, coding from open source models while frontier reasoning remains expensive, organizations can make more cost effective choices.
+
+Our approach uses a March 2026 snapshot of LLM prices and benchmark scores. We fit separate price versus performance curves for each benchmark and compare the results to see whether different skills follow different market pricing patterns
+
+Our hypotheses are: (H1) the price–performance slope differs across the five benchmarks, with coding cheapest per score point and frontier reasoning (humanitys_last_exam) most expensive; (H2) open-source models sit systematically below the price–performance line of closed-source models, controlling for score.
+ 
+## Section 2 - Data
+ 
+Source: Kaggle - LLM Price-Performance Tracker (March 2026) by kanchana1990.
+https://www.kaggle.com/datasets/kanchana1990/llm-price-performance-tracker-march-2026
+
+Each row is one LLM model as observed in a single snapshot taken on 2026-03-31. The variables we use:
+ 
+- Identifiers: model_name, provider
+- Overall scores: aa_intelligence_index, aa_coding_index, composite_benchmark
+- Per-skill benchmarks: mmlu_pro (general knowledge), gpqa_diamond (science), humanitys_last_exam (multidisciplinary performance), livecodebench (coding), scicode (scientific coding)
+- Categories: pricing_tier, is_open_source
+- Prices in USD per 1M tokens: input_cost_usd_per_1m, output_cost_usd_per_1m, blended_cost_usd_per_1m
+- Discrete numeric: release_year and parameter_count (in billions).
+The mix of categorical (provider, pricing_tier, is_open_source), discrete numeric (release_year, parameter_count), and continuous numeric variables (benchmark scores, prices) fits the project requirement of having varied types.
+
+\newpage
+## Section 3 - Preliminary results
+
+```{r warning=FALSE}
+# Data cleaning
+df <- read_csv("../data/llm_price_performance_tracker_2026-03-31.csv", show_col_types = FALSE)
+
+threshold <- 0.3
+
+missing_fraction <- colMeans(is.na(df))
+cols_to_keep <- names(missing_fraction[missing_fraction <= threshold])
+print(cols_to_keep)
+extra_money_cols <- c("pricing_tier", "input_cost_usd_per_1m",
+                      "output_cost_usd_per_1m", "blended_cost_usd_per_1m")
+cols_to_keep <- union(cols_to_keep, intersect(extra_money_cols, names(df)))
+
+
+df_filtered <- df %>% select(all_of(cols_to_keep))
+llm <- df_filtered %>% drop_na()
+
+llm <- llm %>% filter(blended_cost_usd_per_1m > 0)
+```
+
+Price distribution. Prices span several orders of magnitude, so we work on a log scale.
+ 
+```{r warning=FALSE, fig.width=3, fig.height=2}
+# Price distribution.
+ggplot(llm, aes(x = blended_cost_usd_per_1m)) +
+  geom_histogram(bins = 30) +
+  scale_x_log10() +
+  labs(title = "Distribution of LLM blended cost",
+       x = "USD per 1M tokens (log scale)", y = "Count") +
+  theme(
+    plot.title = element_text(size = 10),
+  )
+```
+ 
+Price vs each benchmark, side by side. This is the core picture of our question - one panel per skill, same axes, so we can compare slopes directly.
+ 
+```{r warning=FALSE}
+# Price vs each benchmark, side by side.
+llm_long <- llm %>%
+  pivot_longer(cols = c(mmlu_pro, gpqa_diamond, humanitys_last_exam,
+                        livecodebench, scicode),
+               names_to = "benchmark", values_to = "score")
+
+ggplot(llm_long, aes(x = blended_cost_usd_per_1m, y = score,
+                     color = is_open_source)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE) +
+  scale_x_log10() +
+  facet_wrap(~ benchmark, scales = "free_y") +
+  labs(title = "Benchmark score vs price, by skill",
+       x = "Blended cost per 1M tokens (log scale, USD)",
+       y = "Benchmark score",
+       color = "Open source")
+```
+
+\newpage
+Open vs closed source - performance gap by benchmark.
+ 
+```{r warning=FALSE}
+# Open vs closed source - performance gap by benchmark
+ggplot(llm_long, aes(x = is_open_source, y = score, fill = is_open_source)) +
+  geom_boxplot() +
+  facet_wrap(~ benchmark, scales = "free_y") +
+  labs(title = "Performance: open vs closed source, by benchmark",
+       x = "Open source?", y = "Score")
+```
+ 
+Summary table.
+ 
+```{r warning=FALSE}
+# Summary table
+llm %>%
+  group_by(provider) %>%
+  summarise(n = n(),
+            mean_intel = mean(aa_intelligence_index, na.rm = TRUE),
+            mean_coding = mean(aa_coding_index, na.rm = TRUE),
+            mean_price = mean(blended_cost_usd_per_1m, na.rm = TRUE)) %>%
+  arrange(desc(mean_intel))
+```
+ 
+What we expect to see: a positive but noisy link between price and performance for every benchmark, slopes that differ across skills, open-source models clustered at lower price, and a handful of providers dominating the high-price / high-score corner.
+
+\newpage
+## Section 4 - Work plan
+Although our question is phrased as 'what does $1 buy', we model log(price) as the response and benchmark scores as predictors. This is the standard hedonic-pricing framing: the regression coefficient on a benchmark estimates how much extra the market charges for one more unit of that skill, holding others fixed, which is the inverse of (and equivalent to) 'price per score point'.
+
+Outcome (Y): blended_cost_usd_per_1m, but we take its log() to make varying values more manageable.
+Predictors (X): the five skill benchmarks:
+- mmlu_pro - knowledge score
+- gpqa_diamond - science reasoning score
+- humanitys_last_exam - multidisciplinary performance score
+- livecodebench - real-world coding score
+- scicode - scientific coding score
+plus is_open_source and provider as controls.
+ 
+Comparison groups: open-source vs. closed-source models (a true between-group comparison). The five benchmarks are not comparison groups but five separate outcomes measured on the same models; we compare the coefficients across the five benchmark regressions, not the models across benchmarks.
+ 
+Methods:
+- One simple linear regression of log(price) on each benchmark, then compare the slopes - this gives us the percentage price premium per score point for each skill.
+- One multiple regression of all benchmarks together, to isolate how each skill actually effects prices on its own.
+- For each benchmark regression we extract the residuals. A negative residual identifies a model that is cheaper than its score predicts. We then compute the pairwise Spearman correlation of residuals across the five regressions to test whether the same models are consistently cheap across multiple skills.
+- To compare open-source and closed-source models, we run a Welch's two-sample t-test on the residuals per benchmark, and we add is_open_source as a predictor in the multiple regression to test whether open-source models are systematically cheaper after controlling for skill.
+
+We are splitting tasks into parts and working on it at the same time, where each of us working on a different topic like: cleaning the data, making the graph, writing and documenting the process. We also switch the work sometimes so its not a constant one person per topic.
+
+## Appendix
+
+### Data README
+
+```{r include_data_readme, comment=''}
+cat(readLines('../data/README.md'), sep = '\n')
+```
+
+### Source code
+
+```{r, ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+
+```
