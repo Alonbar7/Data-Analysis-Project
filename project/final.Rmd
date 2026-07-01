@@ -4,7 +4,7 @@ author: "Team 12 - Alon Bar, Amir Belinsky, Tal Ber and Nitzan Graf"
 output: pdf_document
 ---
 
-!["sda"](path/to/image.png)
+[![Alt text](../githubLogo.png)](https://github.com/Alonbar7/Data-Analysis-Project#)
 
 \newpage
 
@@ -68,9 +68,10 @@ We hypothesize that the price-performance slope differs significantly across dom
 ### Data Sources and Entities
 This analysis is based on two separate datasets. We joined Kaggle's "LLM Price-Performance Tracker" (453 entities) with the "LifeArchitect.ai Models Table" (886 entities). 
 
-The LLM Price-Performance Tracker primary provides different benchmarks score and general model information like oss. The LifeArchitect dataset contains model architecture features like parameters number, token trained and architecture type.
+The LLM Price-Performance Tracker primarily provides different benchmark scores and general model information like OSS. The LifeArchitect dataset contains model architecture features like parameters number,
+token trained and architecture type.
 
-After deep data cleaning, we are left with 67 entities with 11 features.
+After deep data cleaning, we are left with 67 entities and 11 features.
 
 ### Sample Selection
 To get as many models as possible, with no null values in any row, we took the following steps: (1) choosing only the columns we need and removing the rest. (2) removing duplicate rows. (3) removing any row that had null values. (4) normalizing the "model_name" column so it matches with the LifeArchitect data-set. 
@@ -148,7 +149,9 @@ ggplot(plot_df, aes(x = blended_cost_usd_per_1m, y = z)) +
 
 ```
  
-Here we perform a t-test on the significance of each slope. Only the slope for the scicode benchmark is statistically significant. That means that there isn't a clear correlation between the blended_costs to the benchmarks (apart from scicode).
+Here we perform a t-test on the significance of each slope. Only the slope for the scicode benchmark is
+statistically significant. This means that there isn’t a clear correlation between the blended_cost and the
+benchmarks (apart from scicode).
  
 ```{r warning=FALSE}
 test_df <- dataset %>%
@@ -179,7 +182,7 @@ kable(results,
 
 ```
 
-Here we figured out if cost is the real predictor. We showed the process only for scicode but its identical to the rest (we did the rest, this one is the most valuable). We have discovered a strong correlation between the the other parameters to the benchmark score, the parameters number for example (fig 1) and the table for each of the variables (fig 2). The we continued to find which variable alone predicts the benchmarks score the best (fig 3). We have found that there is a strong correlation between other variables and the benchmarks, and that the cost variable is very weak compared to the rest.
+Here we figured out whether cost is the real predictor. We've shown the process only for scicode, but it's identical to the rest (which we have also done). We have discovered a strong correlation between the benchmark score and other variables, like parameters_number for example (fig 1), as well as correlations between several variables, as seen in the table (fig 2). Then we moved on to find which variable alone predicts the benchmark score best (fig 3). We can see that cost is a much weaker predictor than these other variables.
 
 ```{r warning=FALSE, message=FALSE, fig.width=14, fig.height=4.5}
 # prepare data frames
@@ -239,7 +242,9 @@ p3 <- tableGrob(single, rows = NULL)
 (p1 + p2 + p3) + plot_layout(widths = c(1, 0.8, 1.3))
 ```
 
-We see that the model's "scale" (number of parameters and token trained) correlated very good with the cost (fig 1). After removing the scale of the model we have seen that the effect of the cost on the benchmark is actually negative (figs 2,3).
+We see that the model’s “scale” (number of parameters and token trained) correlated very well with the
+cost (fig 1). After neutralizing the scale, we have seen that the effect of the cost on the benchmark
+is actually negative (figs 2,3).
  
 ```{r warning=FALSE, fig.width=16, fig.height=4}
 # new model
@@ -347,14 +352,14 @@ ggplot(resid_df, aes(x = cost_resid, y = score_resid)) +
 
 #### Future Work - 
 
-**If given more time:** We would analyze different pricing strategies preformed by the top companies and use it to enhance our research. We would try to find different pricing strategies across different domains and calculate how prices correlated to preformance inside each domain and pricing strategy.
+**If given more time:** We would analyze different pricing strategies utilized by the top companies and use that to enhance our research. We would try to find different pricing strategies across different domains and calculate how prices correlated to performance inside each domain and pricing strategy.
 
 ## Appendix
 
 ### Data README
 
 ```{r include_data_readme, comment=''}
-cat(readLines('../data/README.md'), sep = '\n')
+cat(readLines('../README.md'), sep = '\n')
 ```
 
 ### Source code
