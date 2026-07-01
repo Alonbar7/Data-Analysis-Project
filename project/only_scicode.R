@@ -1,40 +1,32 @@
-# =============================================================================
-# Do you get what you pay for? Price vs. benchmark performance in LLMs
-# -----------------------------------------------------------------------------
-# Question: once we account for model scale (parameters, training tokens), does a
-# model's PRICE still predict how well it scores on capability benchmarks?
-# Road map: build data -> look at cost, then size -> model what drives score ->
-# explain why cost only LOOKED important -> conclude.
-# =============================================================================
+# price vs benchmark performance in LLMs
+# does price predict benchmark score once we control for model scale
+# (params + training tokens)? this one drills into a single benchmark (SciCode).
 
-# ---- libraries ----
 library(tidyverse)   # dplyr, tidyr, ggplot2, readr, purrr
 library(broom)       # tidy(), glance()
 library(car)         # vif()
 library(ppcor)       # pcor.test()
 
-# ---- inputs ----
-CSV_PATH_MAIN   <- "data/llm_price_performance_tracker_2026-03-31.csv"
+# inputs
+CSV_PATH_MAIN <- "data/llm_price_performance_tracker_2026-03-31.csv"
 CSV_PATH_SECOND <- "data/LifeArchitect_Models.csv"
-COST_CAP        <- 20   # $/1M; drops 2 price outliers (o1 $30, claude-3-opus $26.25)
+COST_CAP <- 20   # $/1M, drops the 2 price outliers (o1 $30, claude-3-opus $26.25)
 
 benchmarks <- c("livecodebench", "scicode", "mmlu_pro",
                 "gpqa_diamond", "humanitys_last_exam")
 
-# match key for the two sources: lower-case, strip punctuation & variant suffixes
+# match key for the two sources: lowercase, strip punctuation + variant suffixes
 norm <- function(x) sub(" (instruct|chat|base|it|preview|thinking)$", "",
                         gsub("\\s+", " ", trimws(gsub("[-_]", " ",
                                                       tolower(sub("\\s*\\(.*\\)", "", x))))))
 zscore <- function(x) (x - mean(x, na.rm = TRUE)) / sd(x, na.rm = TRUE)
 
-# =============================================================================
-# STAGE 1 - BUILD THE DATASET
-# Two sources: a price/benchmark tracker and a model-spec table (params, tokens).
-# Keep one clean row per model (strongest variant), inner-join on the normalized
-# name, and z-score each benchmark so the five sit on a common scale.
-# =============================================================================
 
-# source A: benchmarks + price; keep the strongest variant per model
+# ---- stage 1: build the dataset ----
+# price/benchmark tracker + a model spec table (params, tokens). one row per
+# model, join on the normalized name, z-score each benchmark so they're comparable.
+
+# benchmarks + price, keep the best variant per model
 llm <- read_csv(CSV_PATH_MAIN, show_col_types = FALSE) %>%
   mutate(model_name = norm(model_name)) %>%
   dplyr::select(all_of(c("model_name", benchmarks,
@@ -44,38 +36,37 @@ llm <- read_csv(CSV_PATH_MAIN, show_col_types = FALSE) %>%
   slice_max(livecodebench, n = 1, with_ties = FALSE) %>%
   ungroup()
 
-# source B: scale specs (skip junk header row); one row per model
+# scale specs (skip the junk header row), one row per model
 extra <- read_csv(CSV_PATH_SECOND, skip = 1, show_col_types = FALSE) %>%
   mutate(model_name = norm(model_name)) %>%
   dplyr::select(model_name, Params, `Tokens \ntrained (B)`) %>%
   drop_na() %>%
   distinct(model_name, .keep_all = TRUE)
 
-# inner-join -> models present in both sources, then z-score the benchmarks
+# inner join keeps models in both sources, then z-score the benchmarks
 dataset <- inner_join(llm, extra, by = "model_name") %>%
   mutate(across(all_of(benchmarks), zscore, .names = "{.col}_z"))
 
-# analysis frame: drop price outliers and add predictors on sensible scales
+# analysis frame: drop price outliers, add predictors on sensible scales
 adf <- dataset %>%
   filter(blended_cost_usd_per_1m <= COST_CAP) %>%
   mutate(
-    log_params = log10(Params),                                    # heavily skewed
+    log_params = log10(Params),   # very skewed
     log_tokens = log10(as.numeric(gsub(",", "", `Tokens \ntrained (B)`))),
-    cost       = blended_cost_usd_per_1m,
-    oss        = as.integer(is_open_source)
+    cost = blended_cost_usd_per_1m,
+    oss = as.integer(is_open_source)
   )
 
-# long form for the faceted plots: one row per (model, benchmark)
+# long form for the facet plots, one row per (model, benchmark)
 long_z <- adf %>%
   dplyr::select(cost, log_params, ends_with("_z")) %>%
   pivot_longer(ends_with("_z"), names_to = "test", values_to = "z") %>%
   mutate(test = sub("_z$", "", test))
 
-# =============================================================================
-# STAGE 2 - DOES PRICE TRACK PERFORMANCE?
-# First look: each benchmark (z) vs. cost, with a per-benchmark slope and a
-# formal test. "You get what you pay for" predicts positive, significant slopes.
-# =============================================================================
+
+# ---- stage 2: does price track performance? ----
+# each benchmark vs cost, with a slope + a test. "you get what you pay for" would
+# show up as positive, significant slopes.
 cost_slopes <- long_z %>%
   group_by(test) %>%
   summarise(slope = coef(lm(z ~ cost))[2], .groups = "drop") %>%
@@ -102,13 +93,12 @@ cost_test <- long_z %>%
   }) %>%
   ungroup() %>%
   mutate(significant = p_value < 0.05)
-print(cost_test)        # slopes are weak and mostly non-significant
+print(cost_test)        # weak, mostly not significant
 
-# =============================================================================
-# STAGE 3 - DOES SIZE TRACK PERFORMANCE?
-# Same view against model size (log10 params). If scale is the real driver these
-# slopes should be clearly positive - unlike the cost slopes above.
-# =============================================================================
+
+# ---- stage 3: does size track performance? ----
+# same plot vs model size (log10 params). if scale is the real driver these
+# should be clearly positive, unlike the cost slopes above.
 size_slopes <- long_z %>%
   group_by(test) %>%
   summarise(slope = coef(lm(z ~ log_params))[2], .groups = "drop") %>%
@@ -126,63 +116,61 @@ print(
     theme_minimal(base_size = 12)
 )
 
-# =============================================================================
-# STAGE 4 - WHAT ACTUALLY PREDICTS SCORE?
-# Focus on one benchmark (SciCode) and let candidate predictors compete:
-# size (log params, log tokens), price (cost) and open-source (oss). Goal: find
-# which carry real, INDEPENDENT explanatory power once they control each other.
-# =============================================================================
-mdf   <- adf %>% dplyr::select(scicode_z, log_params, log_tokens, cost, oss) %>% drop_na()
+
+# ---- stage 4: what actually predicts score? ----
+# zoom in on SciCode and let the predictors compete: size (params, tokens), price
+# (cost), open-source (oss). which ones keep real power once they control for
+# each other?
+mdf <- adf %>% dplyr::select(scicode_z, log_params, log_tokens, cost, oss) %>% drop_na()
 preds <- c("log_params", "log_tokens", "cost", "oss")
 
-# collinearity sanity check among the predictors
+# quick collinearity check
 print(round(cor(mdf[preds]), 2))
 
-# marginal power: each predictor on its own
+# each predictor on its own
 single <- lapply(preds, function(p) {
   m <- lm(reformulate(p, "scicode_z"), data = mdf)
   glance(m) %>% transmute(predictor = p, r2 = r.squared, p_value = p.value)
 }) %>% bind_rows()
-print(single)           # scale vars dominate; cost & oss explain little
+print(single)           # scale vars dominate, cost & oss barely do anything
 
-# full model: do coefficients survive controlling for each other?
+# full model - do the coefs survive controlling for each other?
 full <- lm(scicode_z ~ log_params + log_tokens + cost + oss, data = mdf)
 print(summary(full))
-print(vif(full))        # all < 5 -> collinearity mild, coefficients interpretable
+print(vif(full))        # all < 5, coefs are interpretable
 
-# does price/oss add anything beyond scale alone?
+# does cost/oss add anything over scale alone?
 scale_only <- lm(scicode_z ~ log_params + log_tokens, data = mdf)
-print(anova(scale_only, full))   # non-significant F -> they add nothing
+print(anova(scale_only, full))   # non-sig F -> nope
 
-# let AIC pick the model, then eyeball diagnostics
+# let AIC pick a model, then look at the diagnostics
 best <- step(full, direction = "both", trace = 0)
 print(summary(best))             # keeps scale, drops cost & oss
 par(mfrow = c(1, 1)); plot(best); par(mfrow = c(1, 1))
 
-# =============================================================================
-# STAGE 5 - WHY DID COST LOOK IMPORTANT?
-# Cost is entangled with scale: pricier models tend to be bigger. Show the raw
-# positive cost-score link flip sign once scale is held constant, quantify it
-# with a partial correlation, and pin down which scale variable is responsible.
-# =============================================================================
 
-# cost correlates with size -> it is partly just a scale proxy
+# ---- stage 5: why did cost look important? ----
+# cost is tangled with scale (pricier models are bigger). the raw positive
+# cost-score link flips sign once scale is held constant. quantify it with a
+# partial correlation and find which scale var is doing it.
+
+# cost correlates with size, so it's partly just a scale proxy
 print(round(cor(mdf[c("cost", "log_params", "log_tokens", "oss")]), 2))
 
-# the sign flip: cost's coefficient alone vs. with scale controlled
+# the sign flip: cost alone vs cost with scale controlled
 sign_flip <- bind_rows(
-  tidy(lm(scicode_z ~ cost, data = mdf))                           %>% mutate(model = "cost alone"),
+  tidy(lm(scicode_z ~ cost, data = mdf)) %>% mutate(model = "cost alone"),
   tidy(lm(scicode_z ~ cost + log_params + log_tokens, data = mdf)) %>% mutate(model = "cost + scale")
 ) %>% filter(term == "cost") %>% dplyr::select(model, estimate, p.value)
 print(sign_flip)        # positive alone, negative once scale is in
 
-# formal partial correlation: cost vs score, holding scale constant
-raw_r   <- cor(mdf$cost, mdf$scicode_z)
+# partial correlation: cost vs score holding scale constant
+raw_r <- cor(mdf$cost, mdf$scicode_z)
 partial <- pcor.test(mdf$cost, mdf$scicode_z, mdf[c("log_params", "log_tokens")])
 cat(sprintf("cost-score correlation:  raw %+.3f  ->  partial %+.3f (p = %.3f)\n",
             raw_r, partial$estimate, partial$p.value))
 
-# visualize the confound: cost rises with both size measures
+# show the confound: cost rises with both size measures
 print(
   adf %>%
     pivot_longer(c(log_params, log_tokens), names_to = "predictor", values_to = "value") %>%
@@ -195,9 +183,9 @@ print(
     theme_minimal(base_size = 12)
 )
 
-# payoff plot: with scale removed from BOTH, cost's residual link is negative
+# payoff: strip scale from both and cost's residual link is negative
 mdf <- mdf %>% mutate(
-  cost_resid  = resid(lm(cost      ~ log_params + log_tokens, data = mdf)),
+  cost_resid = resid(lm(cost ~ log_params + log_tokens, data = mdf)),
   score_resid = resid(lm(scicode_z ~ log_params + log_tokens, data = mdf))
 )
 print(
@@ -212,7 +200,7 @@ print(
 
 # which confounder does the work? strip one at a time
 strip <- function(ctrl) {
-  cr <- resid(lm(reformulate(ctrl, "cost"),      data = mdf))
+  cr <- resid(lm(reformulate(ctrl, "cost"), data = mdf))
   sr <- resid(lm(reformulate(ctrl, "scicode_z"), data = mdf))
   cor(cr, sr)
 }
@@ -222,16 +210,14 @@ cat(sprintf("cost-score corr | nothing %+.3f | params %+.3f | tokens %+.3f | bot
 
 # sanity check the other side: is training tokens a genuine predictor? (yes)
 tok_partial <- with(mdf, cor.test(resid(lm(log_tokens ~ log_params + cost)),
-                                  resid(lm(scicode_z  ~ log_params + cost))))
+                                  resid(lm(scicode_z ~ log_params + cost))))
 cat(sprintf("tokens partial correlation (params+cost removed): %+.3f (p = %.4f)\n",
             tok_partial$estimate, tok_partial$p.value))
 
-# =============================================================================
-# CONCLUSION
-# On its own, price barely tracks benchmark score, and the little signal it has
-# is a SCALE PROXY: bigger models cost more and score higher. Hold size and
-# training tokens constant and price's apparent advantage vanishes - even
-# reverses (cheaper-for-their-size models do slightly better). The real,
-# independent drivers of score are model scale - parameters and, notably,
-# training tokens - not how much the model costs.
-# =============================================================================
+
+# ---- takeaway ----
+# price barely tracks score on its own, and the little signal it has is just a
+# scale proxy - bigger models cost more and score higher. hold size + training
+# tokens constant and price's advantage disappears, even reverses
+# (cheaper-for-their-size models do a bit better). the real drivers are model
+# scale (params and, notably, training tokens), not price.
